@@ -1,64 +1,52 @@
-import os
 from PIL import Image
+import os
 
-def find_images_with_size(folder_path, target_width, target_height):
+def crop_image(image_path, output_path=None):
     """
-    Find images in the specified folder that match the target dimensions
+    Resize an image to 512x512 by removing the last 5 pixel columns from the right side
     
-    Parameters:
-    folder_path (str): Path to folder containing images
-    target_width (int): Target image width
-    target_height (int): Target image height
+    Args:
+        image_path (str): Path to the input image
+        output_path (str, optional): Path to save the output image. If None, will save to same folder with '_512x512' suffix
     
     Returns:
-    list: List of image filenames with specified dimensions
+        str: Path where the resized image was saved
     """
-    matched_images = []
-    
-    # Check if the folder exists
-    if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
-        print(f"Error: The folder {folder_path} does not exist or is not a directory.")
-        return matched_images
-    
-    # List all files in the directory
-    for filename in os.listdir(folder_path):
-        file_path = os.path.join(folder_path, filename)
-        
-        # Check if it's a file
-        if os.path.isfile(file_path):
-            try:
-                # Try to open the file as an image
-                with Image.open(file_path) as img:
-                    width, height = img.size
-                    
-                    # Check if image has the target size
-                    if width == target_width and height == target_height:
-                        matched_images.append(filename)
-                        print(f"Found matching image: {filename} - Size: {width}x{height}")
-            except Exception as e:
-                # Skip files that aren't valid images
-                continue
-    
-    # Print summary
-    if matched_images:
-        print(f"\nFound {len(matched_images)} images with size {target_width}x{target_height}")
-    else:
-        print(f"\nNo images with size {target_width}x{target_height} found")
-    
-    return matched_images
+    try:
+        # Open the image
+        with Image.open(image_path) as img:
+            # Get original dimensions
+            width, height = img.size
+            print(f"Original image size: {width}x{height}")
+            
+            # Calculate cropping box (left, upper, right, lower)
+            # Remove last 5 pixels from right side
+            crop_box = (0, 0, width - 5, height)
+            
+            # Crop the image
+            cropped_img = img.crop(crop_box)
+            
+            # Check the new dimensions
+            new_width, new_height = cropped_img.size
+            print(f"After cropping: {new_width}x{new_height}")
+            
+            # If output path is not specified, create one
+            if output_path is None:
+                file_name, file_ext = os.path.splitext(image_path)
+                output_path = f"{file_name}_512x512{file_ext}"
+            
+            # Save the cropped image
+            cropped_img.save(output_path)
+            print(f"Resized image saved to: {output_path}")
+            
+            return output_path
+            
+    except Exception as e:
+        print(f"Error processing image: {e}")
+        return None
 
-# Set the target folder and dimensions
-folder_path = r"D:\Tahmid\Data\Test\fold_4\masks"
-target_width = 512
-target_height = 517
+# Path to the image
+image_path = r"D:\Tahmid\Data\Test\fold_4\masks\12562.png"
 
-# Find and print the matching images
-matching_images = find_images_with_size(folder_path, target_width, target_height)
-
-# You can also save the list to a text file if needed
-if matching_images:
-    output_file = os.path.join(os.path.dirname(folder_path), "matching_images.txt")
-    with open(output_file, "w") as f:
-        for img in matching_images:
-            f.write(f"{img}\n")
-    print(f"List of matching images saved to {output_file}")
+# Resize the image
+crop_image(image_path)
