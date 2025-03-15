@@ -1,0 +1,259 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+import numpy as np
+import os
+from PIL import Image
+from sklearn.metrics import f1_score
+
+ground_truth_masks_path = r'P:\Thesis\RescueNet'
+class_id = 0  # Class to evaluate
+
+class ConstrainedGWO:
+    def __init__(self, obj_func, dim=10, search_domain=(0, 1), population_size=50, max_iter=100):
+        self.obj_func = obj_func
+        self.dim = dim
+        self.search_domain = search_domain
+        self.population_size = population_size
+        self.max_iter = max_iter
+        
+        # Best solutions found so far (3 leaders: alpha, beta, delta)
+        self.alpha_pos = None
+        self.alpha_score = float('inf')
+        
+        self.beta_pos = None
+        self.beta_score = float('inf')
+        
+        self.delta_pos = None
+        self.delta_score = float('inf')
+        
+        # Initialize solution tracking
+        self.best_scores = []
+        self.final_solution = None
+        
+    def _normalize_solution(self, solution):
+        """Normalize solution so sum equals 1"""
+        sum_val = np.sum(solution)
+        if sum_val > 0:  # Avoid division by zero
+            return solution / sum_val
+        else:
+            # If all values are zero, return a uniform distribution
+            return np.ones(self.dim) / self.dim
+    
+    def _initialize_population(self):
+        """
+        Initialize the wolf pack population with random solutions
+        that satisfy the sum constraint
+        """
+        population = np.random.random((self.population_size, self.dim))
+        
+        # Normalize each solution to sum to 1
+        for i in range(self.population_size):
+            population[i] = self._normalize_solution(population[i])
+            
+        return population
+    
+    def _update_position(self, current_pos, a, A1, A2, A3, C1, C2, C3):
+        # Position update components from alpha, beta, and delta
+        d_alpha = abs(C1 * self.alpha_pos - current_pos)
+        d_beta = abs(C2 * self.beta_pos - current_pos)
+        d_delta = abs(C3 * self.delta_pos - current_pos)
+        
+        x1 = self.alpha_pos - A1 * d_alpha
+        x2 = self.beta_pos - A2 * d_beta
+        x3 = self.delta_pos - A3 * d_delta
+        
+        # New position is the average of positions from alpha, beta, and delta influence
+        new_pos = (x1 + x2 + x3) / 3
+        
+        # Ensure solutions are within bounds
+        new_pos = np.clip(new_pos, self.search_domain[0], self.search_domain[1])
+        
+        # Normalize to satisfy the sum = 1 constraint
+        new_pos = self._normalize_solution(new_pos)
+        
+        return new_pos
+    
+    def optimize(self, verbose=True):
+        # Initialize the population
+        population = self._initialize_population()
+        fitness = np.zeros(self.population_size)
+        
+        # Main loop
+        for iteration in range(self.max_iter):
+            # Evaluate each wolf's fitness
+            for i in range(self.population_size):
+                # Calculate fitness
+                fitness[i] = self.obj_func(population[i])
+                
+                # Update alpha, beta, and delta
+                if fitness[i] < self.alpha_score:
+                    self.alpha_score = fitness[i]
+                    self.alpha_pos = population[i].copy()
+                elif fitness[i] < self.beta_score:
+                    self.beta_score = fitness[i]
+                    self.beta_pos = population[i].copy()
+                elif fitness[i] < self.delta_score:
+                    self.delta_score = fitness[i]
+                    self.delta_pos = population[i].copy()
+            
+            # Update a parameter (decreases linearly from 2 to 0)
+            a = 2 - iteration * (2 / self.max_iter)
+            
+            # Update each wolf's position
+            for i in range(self.population_size):
+                # Generate random components
+                r1, r2 = np.random.random(2)
+                
+                # Update coefficients for alpha
+                A1 = 2 * a * r1 - a
+                C1 = 2 * r2
+                
+                # New random values for beta
+                r1, r2 = np.random.random(2)
+                A2 = 2 * a * r1 - a
+                C2 = 2 * r2
+                
+                # New random values for delta
+                r1, r2 = np.random.random(2)
+                A3 = 2 * a * r1 - a
+                C3 = 2 * r2
+                
+                # Update position
+                population[i] = self._update_position(
+                    population[i], a, A1, A2, A3, C1, C2, C3
+                )
+            
+            # Store best score for tracking
+            self.best_scores.append(self.alpha_score)
+            
+            # Print iteration info
+            if verbose and (iteration % 10 == 0 or iteration == self.max_iter - 1):
+                print(f"Iteration {iteration}, Best Score: {self.alpha_score:.6f}, "
+                      f"Sum of solution: {np.sum(self.alpha_pos):.6f}")
+        
+        # Store the final solution
+        self.final_solution = self.alpha_pos
+        
+        return self.alpha_pos, self.alpha_score
+    
+    def plot_convergence(self):
+        """Plot the convergence curve of the optimization process"""
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(1, len(self.best_scores) + 1), self.best_scores)
+        plt.title('GWO Convergence Curve')
+        plt.xlabel('Iteration')
+        plt.ylabel('Objective Function Value')
+        plt.grid(True)
+        plt.show()
+
+def objective_function(weights):
+    # Initialize paths and variables
+    base_path = r'P:\Thesis\RescueNet'
+    npy_model_folders = [os.path.join(base_path, model) for model in base_path]
+    
+    class_id = 0  # Class to evaluate
+    dsc_scores = []
+    
+    # Get all ground truth mask files
+    ground_truth_files = [f for f in os.listdir(ground_truth_masks_path) 
+                         if f.endswith('.png') or f.endswith('.jpg')]
+    
+    for mask_file in ground_truth_files:
+        # a. Construct the full path to the ground truth mask
+        ground_truth_mask_path = os.path.join(ground_truth_masks_path, mask_file)
+        
+        # b. Extract base filename for corresponding .npy files
+        base_name = os.path.splitext(mask_file)[0]
+        
+        # Load probability maps from all 10 model folders
+        model_outputs = []
+        all_models_exist = True
+        
+        for model_folder in npy_model_folders:
+            npy_file_path = os.path.join(model_folder, f"{base_name}.npy")
+            
+            # c. Check if the .npy file exists (skip this image if any model's prediction is missing)
+            if not os.path.exists(npy_file_path):
+                all_models_exist = False
+                print(f"{npy_file_path} doesn't exist") 
+                break
+                
+            # d. Load the probability map
+            probability_map = np.load(npy_file_path)
+            model_outputs.append(probability_map)
+        
+        # Skip this image if any model's prediction is missing
+        if not all_models_exist:
+            continue
+            
+        # Process the probability maps - weighted averaging
+        weighted_probability_map = np.zeros_like(model_outputs[0])
+        for i, output in enumerate(model_outputs):
+            weighted_probability_map += weights[i] * output
+        
+        # Threshold the weighted output
+        output_mask = (weighted_probability_map > 0.5).astype(int)
+        
+        # Process the ground truth mask
+        ground_truth_mask = Image.open(ground_truth_mask_path).convert('P')
+        ground_truth_mask = np.array(ground_truth_mask)
+        
+        # One-hot encode the ground truth mask if needed
+        # (This assumes ground_truth_mask contains class indices)
+        num_classes = 7  # Adjust based on your number of classes
+        
+        # Check if shape of probability map is [C, H, W] (multi-class) or [H, W] (binary)
+        if len(model_outputs[0].shape) == 3:
+            # Multi-class segmentation
+            ground_truth_one_hot = np.zeros((num_classes,) + ground_truth_mask.shape, dtype=np.int32)
+            for c in range(num_classes):
+                ground_truth_one_hot[c] = (ground_truth_mask == c).astype(np.int32)
+                
+            # Extract data for specified class
+            ground_truth_class = ground_truth_one_hot[class_id].flatten()
+            prediction_class = output_mask[class_id].flatten()
+        else:
+            # Binary segmentation
+            ground_truth_class = (ground_truth_mask == class_id).flatten()
+            prediction_class = output_mask.flatten()
+        
+        # Calculate DSC score (F1 score)
+        dsc_score = f1_score(ground_truth_class, prediction_class, zero_division=0)
+        if dsc_score > 0:
+            dsc_scores.append(dsc_score)
+    
+    # Calculate final result
+    if dsc_scores:
+        return -np.mean(dsc_scores)  # Negative for minimization
+    else:
+        return 0  # Return 0 if no valid scores
+
+# Example usage
+if __name__ == "__main__":
+    # Set random seed for reproducibility
+    np.random.seed(42)
+    
+    # Problem dimension (number of parameters to optimize)
+    dim = 10
+    
+    # Create the GWO optimizer
+    gwo = ConstrainedGWO(
+        obj_func=objective_function,
+        dim=dim,
+        search_domain=(0, 1),
+        population_size=50,
+        max_iter=100
+    )
+    
+    # Run the optimization
+    best_solution, best_fitness = gwo.optimize(verbose=True)
+    
+    # Print results
+    print("\nOptimization complete!")
+    print(f"Best solution: {best_solution}")
+    print(f"Sum of parameters: {np.sum(best_solution)}")
+    print(f"Best fitness: {best_fitness}")
+    
+    # Plot convergence
+    gwo.plot_convergence()
