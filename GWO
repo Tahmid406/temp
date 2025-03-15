@@ -1,13 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
-import numpy as np
 import os
 from PIL import Image
 from sklearn.metrics import f1_score
 
-ground_truth_masks_path = r'P:\Thesis\RescueNet'
-class_id = 0  # Class to evaluate
+# Path to ground truth masks
+ground_truth_masks_path = r'D:\Tahmid\Data\Test\fold_4\masks'
+
+# Global variable for the class to evaluate (will be updated in the loop)
+class_id = 1  
 
 class ConstrainedGWO:
     def __init__(self, obj_func, dim=10, search_domain=(0, 1), population_size=50, max_iter=100):
@@ -83,8 +84,8 @@ class ConstrainedGWO:
         for iteration in range(self.max_iter):
             # Evaluate each wolf's fitness
             for i in range(self.population_size):
-                # Calculate fitness
                 fitness[i] = self.obj_func(population[i])
+                print(f"Iteration {iteration + 1}, Wolf {i + 1}: Fitness = {fitness[i]}")
                 
                 # Update alpha, beta, and delta
                 if fitness[i] < self.alpha_score:
@@ -102,39 +103,28 @@ class ConstrainedGWO:
             
             # Update each wolf's position
             for i in range(self.population_size):
-                # Generate random components
                 r1, r2 = np.random.random(2)
-                
-                # Update coefficients for alpha
                 A1 = 2 * a * r1 - a
                 C1 = 2 * r2
                 
-                # New random values for beta
                 r1, r2 = np.random.random(2)
                 A2 = 2 * a * r1 - a
                 C2 = 2 * r2
                 
-                # New random values for delta
                 r1, r2 = np.random.random(2)
                 A3 = 2 * a * r1 - a
                 C3 = 2 * r2
                 
-                # Update position
                 population[i] = self._update_position(
                     population[i], a, A1, A2, A3, C1, C2, C3
                 )
             
             # Store best score for tracking
             self.best_scores.append(self.alpha_score)
-            
-            # Print iteration info
-            if verbose and (iteration % 10 == 0 or iteration == self.max_iter - 1):
-                print(f"Iteration {iteration}, Best Score: {self.alpha_score:.6f}, "
-                      f"Sum of solution: {np.sum(self.alpha_pos):.6f}")
+            print(f"Iteration {iteration + 1}, Best Score: {self.alpha_score}")
         
         # Store the final solution
         self.final_solution = self.alpha_pos
-        
         return self.alpha_pos, self.alpha_score
     
     def plot_convergence(self):
@@ -149,111 +139,91 @@ class ConstrainedGWO:
 
 def objective_function(weights):
     # Initialize paths and variables
-    base_path = r'P:\Thesis\RescueNet'
-    npy_model_folders = [os.path.join(base_path, model) for model in base_path]
+    base_path = r'D:\Tahmid\Probability_Maps'
+    npy_model_folders = [os.path.join(base_path, model) for model in os.listdir(base_path) 
+                         if os.path.isdir(os.path.join(base_path, model))]
     
-    class_id = 0  # Class to evaluate
     dsc_scores = []
     
     # Get all ground truth mask files
     ground_truth_files = [f for f in os.listdir(ground_truth_masks_path) 
-                         if f.endswith('.png') or f.endswith('.jpg')]
+                          if f.endswith('.png') or f.endswith('.jpg')]
     
     for mask_file in ground_truth_files:
-        # a. Construct the full path to the ground truth mask
         ground_truth_mask_path = os.path.join(ground_truth_masks_path, mask_file)
-        
-        # b. Extract base filename for corresponding .npy files
         base_name = os.path.splitext(mask_file)[0]
         
-        # Load probability maps from all 10 model folders
         model_outputs = []
         all_models_exist = True
         
         for model_folder in npy_model_folders:
             npy_file_path = os.path.join(model_folder, f"{base_name}.npy")
-            
-            # c. Check if the .npy file exists (skip this image if any model's prediction is missing)
             if not os.path.exists(npy_file_path):
                 all_models_exist = False
-                print(f"{npy_file_path} doesn't exist") 
                 break
-                
-            # d. Load the probability map
             probability_map = np.load(npy_file_path)
             model_outputs.append(probability_map)
         
-        # Skip this image if any model's prediction is missing
         if not all_models_exist:
             continue
             
-        # Process the probability maps - weighted averaging
         weighted_probability_map = np.zeros_like(model_outputs[0])
         for i, output in enumerate(model_outputs):
             weighted_probability_map += weights[i] * output
         
-        # Threshold the weighted output
         output_mask = (weighted_probability_map > 0.5).astype(int)
-        
-        # Process the ground truth mask
         ground_truth_mask = Image.open(ground_truth_mask_path).convert('P')
         ground_truth_mask = np.array(ground_truth_mask)
         
-        # One-hot encode the ground truth mask if needed
-        # (This assumes ground_truth_mask contains class indices)
         num_classes = 7  # Adjust based on your number of classes
+        ground_truth_mask_one_hot = np.eye(num_classes)[ground_truth_mask]
+        ground_truth_mask_one_hot = ground_truth_mask_one_hot.transpose(2, 0, 1)
         
-        # Check if shape of probability map is [C, H, W] (multi-class) or [H, W] (binary)
-        if len(model_outputs[0].shape) == 3:
-            # Multi-class segmentation
-            ground_truth_one_hot = np.zeros((num_classes,) + ground_truth_mask.shape, dtype=np.int32)
-            for c in range(num_classes):
-                ground_truth_one_hot[c] = (ground_truth_mask == c).astype(np.int32)
-                
-            # Extract data for specified class
-            ground_truth_class = ground_truth_one_hot[class_id].flatten()
-            prediction_class = output_mask[class_id].flatten()
-        else:
-            # Binary segmentation
-            ground_truth_class = (ground_truth_mask == class_id).flatten()
-            prediction_class = output_mask.flatten()
-        
-        # Calculate DSC score (F1 score)
-        dsc_score = f1_score(ground_truth_class, prediction_class, zero_division=0)
+        # Calculate DSC score (F1 score) for the current class
+        dsc_score = f1_score(ground_truth_mask_one_hot[class_id].flatten(), 
+                             output_mask[class_id].flatten(), zero_division=0)
         if dsc_score > 0:
             dsc_scores.append(dsc_score)
     
-    # Calculate final result
     if dsc_scores:
         return -np.mean(dsc_scores)  # Negative for minimization
     else:
-        return 0  # Return 0 if no valid scores
+        return 0
 
-# Example usage
 if __name__ == "__main__":
     # Set random seed for reproducibility
     np.random.seed(42)
+    dim = 10  # Problem dimension (number of parameters to optimize)
     
-    # Problem dimension (number of parameters to optimize)
-    dim = 10
-    
-    # Create the GWO optimizer
-    gwo = ConstrainedGWO(
-        obj_func=objective_function,
-        dim=dim,
-        search_domain=(0, 1),
-        population_size=50,
-        max_iter=100
-    )
-    
-    # Run the optimization
-    best_solution, best_fitness = gwo.optimize(verbose=True)
-    
-    # Print results
-    print("\nOptimization complete!")
-    print(f"Best solution: {best_solution}")
-    print(f"Sum of parameters: {np.sum(best_solution)}")
-    print(f"Best fitness: {best_fitness}")
-    
-    # Plot convergence
-    gwo.plot_convergence()
+    # Loop over class IDs 1 to 6
+    for current_class in range(1, 7):
+        print(f"\n=== Processing Class {current_class} ===")
+        # Update the global class_id for the objective function
+        class_id = current_class
+        
+        # Create the GWO optimizer for the current class
+        gwo = ConstrainedGWO(
+            obj_func=objective_function,
+            dim=dim,
+            search_domain=(0, 1),
+            population_size=50,
+            max_iter=100
+        )
+        
+        # Run the optimization
+        best_solution, best_fitness = gwo.optimize(verbose=True)
+        
+        # Print results for the current class
+        print("\nOptimization complete!")
+        print(f"Class {class_id}:")
+        print(f"Best solution: {best_solution}")
+        print(f"Sum of parameters: {np.sum(best_solution)}")
+        print(f"Best fitness: {best_fitness}")
+        
+        # Plot convergence curve
+        gwo.plot_convergence()
+        
+        # Save the best solution weights to a file
+        save_path = rf"D:\Tahmid\Utils\New folder\GWO_class{class_id}_weights.txt"
+        np.savetxt(save_path, best_solution)
+        print(f"Saved weights to {save_path}")
